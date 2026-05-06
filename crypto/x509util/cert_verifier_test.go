@@ -603,46 +603,86 @@ func TestMaxURLsToTry_AIA(t *testing.T) {
 }
 
 func TestCheckRevocation_FullChain(t *testing.T) {
-	root, rootKey := createRootCA(t, certOptions{
-		keyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	})
-	intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{
-		keyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		crlDistributionPoints: []string{"http://example.com/crl-int"},
-	})
-	leaf := createLeafCert(t, intermediate, intKey, certOptions{
-		crlDistributionPoints: []string{"http://example.com/crl-leaf"},
-	})
-
-	rootCRLBytes := createCRL(t, root, rootKey)
-	intCRLBytes := createCRL(t, intermediate, intKey)
-
-	mockClient := &mockHTTPClient{
-		responses: map[string][]byte{
-			"http://example.com/crl-int":  rootCRLBytes,
-			"http://example.com/crl-leaf": intCRLBytes,
+	tests := []struct {
+		name              string
+		revokedLeafSerial *big.Int
+		revokedIntSerial  *big.Int
+		expectError       error
+		expectedCRLCount  int
+	}{
+		{
+			name:             "no revocation",
+			expectedCRLCount: 2,
+		},
+		{
+			name:              "leaf revoked",
+			revokedLeafSerial: big.NewInt(100),
+			expectError:       ErrCertificateRevoked,
+			expectedCRLCount:  1,
+		},
+		{
+			name:             "intermediate revoked",
+			revokedIntSerial: big.NewInt(2),
+			expectError:      ErrCertificateRevoked,
+			expectedCRLCount: 2,
 		},
 	}
 
-	cfg := Config{HttpClient: mockClient}
-	tc, err := NewCertVerifier(cfg)
-	if err != nil {
-		t.Fatalf("NewTrustChecker failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, rootKey := createRootCA(t, certOptions{
+				keyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			})
+			intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{
+				keyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+				crlDistributionPoints: []string{"http://example.com/crl-int"},
+			})
+			leaf := createLeafCert(t, intermediate, intKey, certOptions{
+				serialNumber:          100,
+				crlDistributionPoints: []string{"http://example.com/crl-leaf"},
+			})
 
-	revCfg := RevocationConfig{
-		Chain:     []*x509.Certificate{leaf, intermediate, root},
-		FullChain: true,
-	}
+			var rootCRLBytes []byte
+			if tt.revokedIntSerial != nil {
+				rootCRLBytes = createCRL(t, root, rootKey, tt.revokedIntSerial)
+			} else {
+				rootCRLBytes = createCRL(t, root, rootKey)
+			}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
-	if err != nil {
-		t.Errorf("CheckRevocation with FullChain=true failed: %v", err)
-	}
+			var intCRLBytes []byte
+			if tt.revokedLeafSerial != nil {
+				intCRLBytes = createCRL(t, intermediate, intKey, tt.revokedLeafSerial)
+			} else {
+				intCRLBytes = createCRL(t, intermediate, intKey)
+			}
 
-	// Verify that the intermediate CRL was checked
-	if len(mockClient.requestedURLs) != 1 {
-		t.Errorf("expected 1 CRL request (for intermediate), got %d", len(mockClient.requestedURLs))
+			mockClient := &mockHTTPClient{
+				responses: map[string][]byte{
+					"http://example.com/crl-int":  rootCRLBytes,
+					"http://example.com/crl-leaf": intCRLBytes,
+				},
+			}
+
+			cfg := Config{HttpClient: mockClient}
+			tc, err := NewCertVerifier(cfg)
+			if err != nil {
+				t.Fatalf("NewTrustChecker failed: %v", err)
+			}
+
+			revCfg := RevocationConfig{
+				Chain:     []*x509.Certificate{leaf, intermediate, root},
+				FullChain: true,
+			}
+
+			err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+			if !errors.Is(err, tt.expectError) {
+				t.Errorf("expected error %v, got %v", tt.expectError, err)
+			}
+
+			if len(mockClient.requestedURLs) != tt.expectedCRLCount {
+				t.Errorf("expected %d CRL requests, got %d", tt.expectedCRLCount, len(mockClient.requestedURLs))
+			}
+		})
 	}
 }
 

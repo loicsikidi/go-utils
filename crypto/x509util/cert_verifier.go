@@ -144,19 +144,14 @@ func (t *certVerifier) CheckRevocation(ctx context.Context, cert *x509.Certifica
 
 	certsToCheck := []*x509.Certificate{cert}
 	if cfg.FullChain {
-		certsToCheck = chain
+		certsToCheck = append(certsToCheck, chain...)
 	}
 
-	for i, certToCheck := range certsToCheck {
-		var issuer *x509.Certificate
-		if i+1 < len(chain) {
-			issuer = chain[i+1]
-		} else {
-			var err error
-			issuer, err = t.findIssuer(ctx, certToCheck, cfg.Chain)
-			if err != nil {
-				return err
-			}
+	fullChain := append([]*x509.Certificate{cert}, chain...)
+	for _, certToCheck := range certsToCheck {
+		issuer, err := t.findIssuer(ctx, certToCheck, append(fullChain, cfg.Chain...))
+		if err != nil {
+			return err
 		}
 
 		if issuer == nil {
