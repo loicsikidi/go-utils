@@ -1,0 +1,45 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+vendors/
+
+# IDE/Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# AI assistant
+.claude/*
+!.claude/skills/
+GOAL.md
+
+# Nix build artifacts
+result
+result-*
+
+# git-hooks.nix's auto-generated config file
+.pre-commit-config.yaml
+
+# direnv state directory
+.direnv/
