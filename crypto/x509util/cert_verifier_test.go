@@ -242,7 +242,7 @@ func TestGetChain_ThreeLevel(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getFullChain(context.Background(), leaf, []*x509.Certificate{intermediate, root})
+	chain, err := tc.GetFullChain(context.Background(), leaf, []*x509.Certificate{intermediate, root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestGetChain_RootOnly(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getFullChain(context.Background(), root, nil)
+	chain, err := tc.GetFullChain(context.Background(), root, nil)
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestGetChain_MissingIntermediate(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getFullChain(context.Background(), leaf, nil)
+	_, err = tc.GetFullChain(context.Background(), leaf, nil)
 	if !errors.Is(err, ErrChainIncomplete) {
 		t.Errorf("expected ErrChainIncomplete, got %v", err)
 	}
@@ -425,7 +425,7 @@ func TestAfterDownloadHook(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getFullChain(context.Background(), leaf, []*x509.Certificate{root})
+	_, err = tc.GetFullChain(context.Background(), leaf, []*x509.Certificate{root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestMaxURLsToTry_AIA(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getFullChain(context.Background(), leaf, []*x509.Certificate{root})
+	_, err = tc.GetFullChain(context.Background(), leaf, []*x509.Certificate{root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestGetChain_MaxDepthReached(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getFullChain(context.Background(), certs[11], certs)
+	_, err = tc.GetFullChain(context.Background(), certs[11], certs)
 	if !errors.Is(err, ErrMaxDepthReached) {
 		t.Errorf("expected ErrMaxDepthReached, got %v", err)
 	}
@@ -689,7 +689,7 @@ func TestGetChain_WithCache(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getFullChain(context.Background(), leaf, nil)
+	chain, err := tc.GetFullChain(context.Background(), leaf, nil)
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
