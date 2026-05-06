@@ -1,0 +1,9 @@
+* internal/backoff
+  * Ajouter support pour backoff strategies (exponential, linear, constant)
+  * support d'opentracing ?
+  * Permettre une fonction de callback pour observer les retries (logging, metrics)
+  * Considérer l'ajout de decorrelated jitter (AWS recommendation)
+
+* net/httputil
+  * Ajouter HttpGETJson
+  * Quel est le comportement lorsqu'il y a une redirection HTTP ?
