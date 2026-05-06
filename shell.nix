@@ -31,6 +31,6 @@ in
     hardeningDisable = ["fortify"];
 
     env = {
-      CGO_ENABLED = "0";
+      CGO_ENABLED = "1";
     };
   }
