@@ -280,19 +280,8 @@ func TestGetChain_RootOnly(t *testing.T) {
 }
 
 func TestGetChain_MissingIntermediate(t *testing.T) {
-	rootKey, rootPub := generateKey(t)
+	root, rootKey := createRootCA(t, certOptions{})
 	_, leafPub := generateKey(t)
-
-	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	root := generateCert(t, rootTemplate, nil, rootPub, rootKey)
 
 	leafTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(3),
@@ -405,50 +394,15 @@ func TestCheckRevocation_NoCRLDP_FullChainFalse(t *testing.T) {
 }
 
 func TestAfterDownloadHook(t *testing.T) {
-	rootKey, rootPub := generateKey(t)
-	intKey, intPub := generateKey(t)
-	_, leafPub := generateKey(t)
-
-	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	root := generateCert(t, rootTemplate, nil, rootPub, rootKey)
-
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Intermediate CA"},
-		Issuer:                root.Subject,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	intermediate := generateCert(t, intTemplate, root, intPub, rootKey)
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, root, intPub, rootKey)
-
-	leafTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Leaf"},
-		Issuer:                intermediate.Subject,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		IssuingCertificateURL: []string{"http://example.com/intermediate"},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-	leaf := generateCert(t, leafTemplate, intermediate, leafPub, intKey)
+	root, rootKey := createRootCA(t, certOptions{})
+	intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{})
+	leaf := createLeafCert(t, intermediate, intKey, certOptions{
+		issuingCertificateURL: []string{"http://example.com/intermediate"},
+	})
 
 	mockClient := &mockHTTPClient{
 		responses: map[string][]byte{
-			"http://example.com/intermediate": intBytes,
+			"http://example.com/intermediate": intermediate.Raw,
 		},
 	}
 
@@ -534,43 +488,11 @@ func TestMaxURLsToTry_CRL(t *testing.T) {
 }
 
 func TestMaxURLsToTry_AIA(t *testing.T) {
-	rootKey, rootPub := generateKey(t)
-	intKey, intPub := generateKey(t)
-	_, leafPub := generateKey(t)
-
-	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	root := generateCert(t, rootTemplate, nil, rootPub, rootKey)
-
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Intermediate CA"},
-		Issuer:                root.Subject,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	intermediate := generateCert(t, intTemplate, root, intPub, rootKey)
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, root, intPub, rootKey)
-
+	root, rootKey := createRootCA(t, certOptions{})
+	intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{})
 	// Create a leaf with more than maxURLsToTry issuing certificate URLs
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "Leaf"},
-		Issuer:       intermediate.Subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		IssuingCertificateURL: []string{
+	leaf := createLeafCert(t, intermediate, intKey, certOptions{
+		issuingCertificateURL: []string{
 			"http://example.com/int1",
 			"http://example.com/int2",
 			"http://example.com/int3",
@@ -579,14 +501,11 @@ func TestMaxURLsToTry_AIA(t *testing.T) {
 			"http://example.com/int6",
 			"http://example.com/int7",
 		},
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-	}
-	leaf := generateCert(t, leafTemplate, intermediate, leafPub, intKey)
+	})
 
 	mockClient := &mockHTTPClient{
 		responses: map[string][]byte{
-			"http://example.com/int5": intBytes,
+			"http://example.com/int5": intermediate.Raw,
 		},
 	}
 
@@ -749,48 +668,16 @@ func TestGetChain_MaxDepthReached(t *testing.T) {
 }
 
 func TestGetChain_WithCache(t *testing.T) {
-	rootKey, rootPub := generateKey(t)
-	intKey, intPub := generateKey(t)
-	_, leafPub := generateKey(t)
-
-	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		SubjectKeyId:          []byte{1, 2, 3, 4},
-	}
-	root := generateCert(t, rootTemplate, nil, rootPub, rootKey)
-
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Intermediate CA"},
-		Issuer:                root.Subject,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		AuthorityKeyId:        []byte{1, 2, 3, 4},
-		SubjectKeyId:          []byte{5, 6, 7, 8},
-	}
-	intermediate := generateCert(t, intTemplate, root, intPub, rootKey)
-
-	leafTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Leaf"},
-		Issuer:                intermediate.Subject,
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-		IsCA:                  false,
-		AuthorityKeyId:        []byte{5, 6, 7, 8},
-	}
-	leaf := generateCert(t, leafTemplate, intermediate, leafPub, intKey)
+	root, rootKey := createRootCA(t, certOptions{
+		subjectKeyID: []byte{1, 2, 3, 4},
+	})
+	intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{
+		authorityKeyID: []byte{1, 2, 3, 4},
+		subjectKeyID:   []byte{5, 6, 7, 8},
+	})
+	leaf := createLeafCert(t, intermediate, intKey, certOptions{
+		authorityKeyID: []byte{5, 6, 7, 8},
+	})
 
 	cache := &mockCache{
 		certs: []*x509.Certificate{root, intermediate},
