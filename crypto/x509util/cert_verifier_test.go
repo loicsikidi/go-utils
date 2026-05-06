@@ -242,17 +242,21 @@ func TestGetChain_ThreeLevel(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getChain(context.Background(), leaf, []*x509.Certificate{intermediate, root})
+	chain, err := tc.getFullChain(context.Background(), leaf, []*x509.Certificate{intermediate, root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
 
-	if len(chain) != 1 {
-		t.Fatalf("expected chain length 1, got %d", len(chain))
+	if len(chain) != 2 {
+		t.Fatalf("expected chain length 2, got %d", len(chain))
 	}
 
 	if chain[0].Subject.CommonName != "Intermediate CA" {
-		t.Errorf("expected intermediate in chain, got %s", chain[0].Subject.CommonName)
+		t.Errorf("expected intermediate in chain[0], got %s", chain[0].Subject.CommonName)
+	}
+
+	if chain[1].Subject.CommonName != "Root CA" {
+		t.Errorf("expected root in chain[1], got %s", chain[1].Subject.CommonName)
 	}
 }
 
@@ -265,7 +269,7 @@ func TestGetChain_RootOnly(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getChain(context.Background(), root, nil)
+	chain, err := tc.getFullChain(context.Background(), root, nil)
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -308,7 +312,7 @@ func TestGetChain_MissingIntermediate(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getChain(context.Background(), leaf, nil)
+	_, err = tc.getFullChain(context.Background(), leaf, nil)
 	if !errors.Is(err, ErrChainIncomplete) {
 		t.Errorf("expected ErrChainIncomplete, got %v", err)
 	}
@@ -467,7 +471,7 @@ func TestAfterDownloadHook(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getChain(context.Background(), leaf, []*x509.Certificate{root})
+	_, err = tc.getFullChain(context.Background(), leaf, []*x509.Certificate{root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -592,7 +596,7 @@ func TestMaxURLsToTry_AIA(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getChain(context.Background(), leaf, []*x509.Certificate{root})
+	_, err = tc.getFullChain(context.Background(), leaf, []*x509.Certificate{root})
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
@@ -738,7 +742,7 @@ func TestGetChain_MaxDepthReached(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	_, err = tc.getChain(context.Background(), certs[11], certs)
+	_, err = tc.getFullChain(context.Background(), certs[11], certs)
 	if !errors.Is(err, ErrMaxDepthReached) {
 		t.Errorf("expected ErrMaxDepthReached, got %v", err)
 	}
@@ -798,17 +802,21 @@ func TestGetChain_WithCache(t *testing.T) {
 		t.Fatalf("NewTrustChecker failed: %v", err)
 	}
 
-	chain, err := tc.getChain(context.Background(), leaf, nil)
+	chain, err := tc.getFullChain(context.Background(), leaf, nil)
 	if err != nil {
 		t.Fatalf("GetChain failed: %v", err)
 	}
 
-	if len(chain) != 1 {
-		t.Fatalf("expected chain length 1, got %d", len(chain))
+	if len(chain) != 2 {
+		t.Fatalf("expected chain length 2, got %d", len(chain))
 	}
 
 	if chain[0].Subject.CommonName != "Intermediate CA" {
-		t.Errorf("expected intermediate in chain, got %s", chain[0].Subject.CommonName)
+		t.Errorf("expected intermediate in chain[0], got %s", chain[0].Subject.CommonName)
+	}
+
+	if chain[1].Subject.CommonName != "Root CA" {
+		t.Errorf("expected root in chain[1], got %s", chain[1].Subject.CommonName)
 	}
 }
 

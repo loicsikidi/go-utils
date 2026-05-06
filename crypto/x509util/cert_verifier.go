@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	goutils "github.com/loicsikidi/go-utils"
@@ -66,14 +67,16 @@ type certVerifier struct {
 	afterDownloadHook func(url *url.URL, kind string)
 	// downloadedCerts keeps track of certificates that have been downloaded to avoid redundant downloads.
 	downloadedCerts map[string]*x509.Certificate
+	// mu protects concurrent access to downloadedCerts.
+	mu sync.RWMutex
 }
 
 // CheckAndSetDefaults validates the configuration and sets default values.
 func (c *Config) CheckAndSetDefaults() error {
-	if c.MaxDepth == 0 {
+	if c.MaxDepth <= 0 {
 		c.MaxDepth = 10
 	}
-	if c.Timeout == 0 {
+	if c.Timeout <= 0 {
 		c.Timeout = DefaultDownloadTimeout
 	}
 	if c.HttpClient == nil {
@@ -100,10 +103,10 @@ func NewCertVerifier(cfg Config) (*certVerifier, error) {
 	}, nil
 }
 
-// getChain builds the certificate chain from the leaf certificate up to (but excluding) the root.
-// It returns only intermediate certificates, using optionalChain, cache, and AIA downloads as needed.
+// getFullChain builds the certificate chain from the leaf certificate up to and including the root.
+// It returns intermediate certificates and the root certificate, using optionalChain, cache, and AIA downloads as needed.
 // Returns [ErrChainIncomplete] if the chain cannot be completed or [ErrMaxDepthReached] if too many downloads are required.
-func (t *certVerifier) getChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
+func (t *certVerifier) getFullChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
 	var chain []*x509.Certificate
 	current := cert
 
@@ -122,10 +125,7 @@ func (t *certVerifier) getChain(ctx context.Context, cert *x509.Certificate, opt
 			return nil, ErrChainIncomplete
 		}
 
-		if !IsRoot(issuer) {
-			chain = append(chain, issuer)
-		}
-
+		chain = append(chain, issuer)
 		current = issuer
 	}
 
@@ -137,27 +137,40 @@ func (t *certVerifier) getChain(ctx context.Context, cert *x509.Certificate, opt
 // Returns [ErrCertificateRevoked] if any certificate is revoked, or nil if all certificates are valid.
 // Special case: if FullChain is false and the certificate has no CRL distribution points, returns nil.
 func (t *certVerifier) CheckRevocation(ctx context.Context, cert *x509.Certificate, cfg RevocationConfig) error {
-	chain, err := t.getChain(ctx, cert, cfg.Chain)
+	if !cfg.FullChain {
+		if len(cert.CRLDistributionPoints) == 0 {
+			return nil
+		}
+
+		issuer, err := t.findIssuer(ctx, cert, cfg.Chain)
+		if err != nil {
+			return err
+		}
+		if issuer == nil {
+			return ErrIssuerNotFound
+		}
+
+		return t.checkCertRevocation(ctx, cert, issuer)
+	}
+
+	chain, err := t.getFullChain(ctx, cert, cfg.Chain)
 	if err != nil {
 		return err
 	}
 
-	certsToCheck := []*x509.Certificate{cert}
-	if cfg.FullChain {
-		certsToCheck = append(certsToCheck, chain...)
-	}
-
-	fullChain := append([]*x509.Certificate{cert}, chain...)
+	certsToCheck := append([]*x509.Certificate{cert}, chain...)
 	for _, certToCheck := range certsToCheck {
-		issuer, err := t.findIssuer(ctx, certToCheck, append(fullChain, cfg.Chain...))
+		// Skip root certificates as they are self-signed and trusted by definition
+		if IsRoot(certToCheck) {
+			continue
+		}
+
+		issuer, err := t.findIssuer(ctx, certToCheck, CertificatesAbove(certToCheck, certsToCheck))
 		if err != nil {
 			return err
 		}
 
 		if issuer == nil {
-			if !cfg.FullChain && len(certToCheck.CRLDistributionPoints) == 0 {
-				return nil
-			}
 			return ErrIssuerNotFound
 		}
 
@@ -229,9 +242,10 @@ func parseURLs(urls []string, maxURLs int) []*url.URL {
 	return result
 }
 
-func (t *certVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, optionalChain []*x509.Certificate) (*x509.Certificate, error) {
+func (t *certVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) (*x509.Certificate, error) {
 	// 1. Check optionalChain first
-	for _, candidate := range optionalChain {
+	chain := goutils.OptionalArg(optionalChain)
+	for _, candidate := range chain {
 		if cert.CheckSignatureFrom(candidate) == nil {
 			return candidate, nil
 		}
@@ -248,13 +262,16 @@ func (t *certVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, o
 	}
 
 	// 3. Check internal downloaded certs
+	t.mu.RLock()
 	for _, issuer := range t.downloadedCerts {
 		if issuer.Subject.String() == cert.Issuer.String() {
 			if cert.CheckSignatureFrom(issuer) == nil {
+				t.mu.RUnlock()
 				return issuer, nil
 			}
 		}
 	}
+	t.mu.RUnlock()
 
 	// 4. Download from AIA
 	aiaURLs := parseURLs(cert.IssuingCertificateURL, maxURLsToTry)
@@ -264,7 +281,9 @@ func (t *certVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, o
 			continue
 		}
 
+		t.mu.Lock()
 		t.downloadedCerts[makeKey(issuer)] = issuer
+		t.mu.Unlock()
 
 		if t.afterDownloadHook != nil {
 			t.afterDownloadHook(aiaURL, "certificate")
