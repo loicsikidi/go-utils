@@ -217,7 +217,7 @@ func createCRL(t *testing.T, issuer *x509.Certificate, issuerKey crypto.Signer, 
 }
 
 func TestNewTrustChecker(t *testing.T) {
-	cfg := Config{}
+	cfg := VerifierConfig{}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -236,7 +236,7 @@ func TestGetChain_ThreeLevel(t *testing.T) {
 	intermediate, intKey := createIntermediateCA(t, root, rootKey, certOptions{})
 	leaf := createLeafCert(t, intermediate, intKey, certOptions{})
 
-	cfg := Config{}
+	cfg := VerifierConfig{}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -263,7 +263,7 @@ func TestGetChain_ThreeLevel(t *testing.T) {
 func TestGetChain_RootOnly(t *testing.T) {
 	root, _ := createRootCA(t, certOptions{})
 
-	cfg := Config{}
+	cfg := VerifierConfig{}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -295,7 +295,7 @@ func TestGetChain_MissingIntermediate(t *testing.T) {
 	}
 	leaf := generateCert(t, leafTemplate, root, leafPub, rootKey)
 
-	cfg := Config{}
+	cfg := VerifierConfig{}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -323,7 +323,7 @@ func TestCheckRevocation_NotRevoked(t *testing.T) {
 		},
 	}
 
-	cfg := Config{HttpClient: mockClient}
+	cfg := VerifierConfig{HttpClient: mockClient}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -356,7 +356,7 @@ func TestCheckRevocation_Revoked(t *testing.T) {
 		},
 	}
 
-	cfg := Config{HttpClient: mockClient}
+	cfg := VerifierConfig{HttpClient: mockClient}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -376,7 +376,7 @@ func TestCheckRevocation_NoCRLDP_FullChainFalse(t *testing.T) {
 	root, rootKey := createRootCA(t, certOptions{})
 	leaf := createLeafCert(t, root, rootKey, certOptions{})
 
-	cfg := Config{}
+	cfg := VerifierConfig{}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -411,7 +411,7 @@ func TestAfterDownloadHook(t *testing.T) {
 		kind string
 	}
 
-	cfg := Config{
+	cfg := VerifierConfig{
 		HttpClient: mockClient,
 		AfterDownloadHook: func(u *url.URL, kind string) {
 			hookCalls = append(hookCalls, struct {
@@ -467,7 +467,7 @@ func TestMaxURLsToTry_CRL(t *testing.T) {
 		},
 	}
 
-	cfg := Config{HttpClient: mockClient}
+	cfg := VerifierConfig{HttpClient: mockClient}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -509,7 +509,7 @@ func TestMaxURLsToTry_AIA(t *testing.T) {
 		},
 	}
 
-	cfg := Config{HttpClient: mockClient}
+	cfg := VerifierConfig{HttpClient: mockClient}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -586,7 +586,7 @@ func TestCheckRevocation_FullChain(t *testing.T) {
 				},
 			}
 
-			cfg := Config{HttpClient: mockClient}
+			cfg := VerifierConfig{HttpClient: mockClient}
 			tc, err := NewCertVerifier(cfg)
 			if err != nil {
 				t.Fatalf("NewTrustChecker failed: %v", err)
@@ -655,7 +655,7 @@ func TestGetChain_MaxDepthReached(t *testing.T) {
 		IsCA:                  false,
 	}, certs[10], pubs[11], keys[10])
 
-	cfg := Config{MaxDepth: 5}
+	cfg := VerifierConfig{MaxDepth: 5}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -683,7 +683,7 @@ func TestGetChain_WithCache(t *testing.T) {
 		certs: []*x509.Certificate{root, intermediate},
 	}
 
-	cfg := Config{Cache: cache}
+	cfg := VerifierConfig{Cache: cache}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)
@@ -719,7 +719,7 @@ func TestCheckRevocation_CRLNotFound(t *testing.T) {
 		responses: map[string][]byte{},
 	}
 
-	cfg := Config{HttpClient: mockClient}
+	cfg := VerifierConfig{HttpClient: mockClient}
 	tc, err := NewCertVerifier(cfg)
 	if err != nil {
 		t.Fatalf("NewTrustChecker failed: %v", err)

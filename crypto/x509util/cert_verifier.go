@@ -44,8 +44,8 @@ type cache interface {
 	FindFunc(fn func(c *x509.Certificate) bool) *x509.Certificate
 }
 
-// Config configures a trust checker instance.
-type Config struct {
+// VerifierConfig configures a trust checker instance.
+type VerifierConfig struct {
 	MaxDepth          int
 	HttpClient        httpClient
 	Timeout           time.Duration
@@ -72,7 +72,7 @@ type certVerifier struct {
 }
 
 // CheckAndSetDefaults validates the configuration and sets default values.
-func (c *Config) CheckAndSetDefaults() error {
+func (c *VerifierConfig) CheckAndSetDefaults() error {
 	if c.MaxDepth <= 0 {
 		c.MaxDepth = 10
 	}
@@ -86,7 +86,7 @@ func (c *Config) CheckAndSetDefaults() error {
 }
 
 // NewCertVerifier creates a new certificate verifier with the provided configuration.
-func NewCertVerifier(cfg Config) (*certVerifier, error) {
+func NewCertVerifier(cfg VerifierConfig) (*certVerifier, error) {
 	if err := cfg.CheckAndSetDefaults(); err != nil {
 		return nil, err
 	}
