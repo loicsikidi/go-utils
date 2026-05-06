@@ -103,10 +103,9 @@ func NewCertVerifier(cfg VerifierConfig) (*certVerifier, error) {
 	}, nil
 }
 
-// getFullChain builds the certificate chain from the leaf certificate up to and including the root.
-// It returns intermediate certificates and the root certificate, using optionalChain, cache, and AIA downloads as needed.
-// Returns [ErrChainIncomplete] if the chain cannot be completed or [ErrMaxDepthReached] if too many downloads are required.
-func (t *certVerifier) getFullChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
+// GetFullChain builds the certificate chain from the leaf certificate up to and including the root.
+// Returns [ErrChainIncomplete] if the chain cannot be completed or [ErrMaxDepthReached] if the chain is too long.
+func (t *certVerifier) GetFullChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
 	var chain []*x509.Certificate
 	current := cert
 
@@ -153,7 +152,7 @@ func (t *certVerifier) CheckRevocation(ctx context.Context, cert *x509.Certifica
 		return t.checkCertRevocation(ctx, cert, issuer)
 	}
 
-	chain, err := t.getFullChain(ctx, cert, cfg.Chain)
+	chain, err := t.GetFullChain(ctx, cert, cfg.Chain)
 	if err != nil {
 		return err
 	}
