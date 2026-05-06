@@ -1,5 +1,10 @@
 # go-utils
 
+![go version](https://img.shields.io/github/go-mod/go-version/loicsikidi/go-utils)
+[![godoc](https://pkg.go.dev/badge/github.com/loicsikidi/go-utils/v1.svg)](https://pkg.go.dev/github.com/loicsikidi/go-utils)
+[![latest](https://img.shields.io/github/v/release/loicsikidi/go-utils)](https://github.com/loicsikidi/go-utils/releases)
+[![license](https://img.shields.io/badge/license-BSD--3--Clause-blue?style=flat-square)](https://raw.githubusercontent.com/loicsikidi/go-utils/main/LICENSE)
+
 > [!IMPORTANT]
 > I plan to use this library strictly for my own projects, so contributions are **closed**.
 
