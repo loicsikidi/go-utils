@@ -6,6 +6,7 @@
 package x509util
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -257,7 +258,7 @@ func (t *CertVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, o
 	// 2. Check cache if provided
 	if t.cache != nil {
 		candidate := t.cache.FindFunc(func(c *x509.Certificate) bool {
-			return c.Subject.String() == cert.Issuer.String()
+			return bytes.Equal(c.RawSubject, cert.RawIssuer)
 		})
 		if candidate != nil && cert.CheckSignatureFrom(candidate) == nil {
 			return candidate, nil
@@ -267,7 +268,7 @@ func (t *CertVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, o
 	// 3. Check internal downloaded certs
 	t.mu.RLock()
 	for _, issuer := range t.downloadedCerts {
-		if issuer.Subject.String() == cert.Issuer.String() {
+		if bytes.Equal(issuer.RawSubject, cert.RawIssuer) {
 			if cert.CheckSignatureFrom(issuer) == nil {
 				t.mu.RUnlock()
 				return issuer, nil
