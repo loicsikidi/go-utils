@@ -333,7 +333,7 @@ func TestCheckRevocation_NotRevoked(t *testing.T) {
 		Chain: []*x509.Certificate{leaf, root},
 	}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+	err = tc.Verify(context.Background(), leaf, revCfg)
 	if err != nil {
 		t.Errorf("CheckRevocation failed: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestCheckRevocation_Revoked(t *testing.T) {
 		Chain: []*x509.Certificate{leaf, root},
 	}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+	err = tc.Verify(context.Background(), leaf, revCfg)
 	if !errors.Is(err, ErrCertificateRevoked) {
 		t.Errorf("expected ErrCertificateRevoked, got %v", err)
 	}
@@ -387,7 +387,7 @@ func TestCheckRevocation_NoCRLDP_FullChainFalse(t *testing.T) {
 		FullChain: false,
 	}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+	err = tc.Verify(context.Background(), leaf, revCfg)
 	if err != nil {
 		t.Errorf("expected nil error for no CRLDP with FullChain=false, got %v", err)
 	}
@@ -477,7 +477,7 @@ func TestMaxURLsToTry_CRL(t *testing.T) {
 		Chain: []*x509.Certificate{leaf, root},
 	}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+	err = tc.Verify(context.Background(), leaf, revCfg)
 	if err != nil {
 		t.Errorf("CheckRevocation failed: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestCheckRevocation_FullChain(t *testing.T) {
 				FullChain: true,
 			}
 
-			err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+			err = tc.Verify(context.Background(), leaf, revCfg)
 			if !errors.Is(err, tt.expectError) {
 				t.Errorf("expected error %v, got %v", tt.expectError, err)
 			}
@@ -729,7 +729,7 @@ func TestCheckRevocation_CRLNotFound(t *testing.T) {
 		Chain: []*x509.Certificate{leaf, root},
 	}
 
-	err = tc.CheckRevocation(context.Background(), leaf, revCfg)
+	err = tc.Verify(context.Background(), leaf, revCfg)
 	if !errors.Is(err, ErrCRLNotFound) {
 		t.Errorf("expected ErrCRLNotFound, got %v", err)
 	}

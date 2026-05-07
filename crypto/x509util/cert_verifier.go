@@ -53,10 +53,10 @@ type VerifierConfig struct {
 	AfterDownloadHook func(url *url.URL, kind string)
 }
 
-// certVerifier is responsible for verifying if a certificate has been revoked.
+// CertVerifier is responsible for verifying if a certificate has been revoked.
 //
 // Note: currently, it only supports checking revocation via CRLs.
-type certVerifier struct {
+type CertVerifier struct {
 	// downloader is responsible for downloading certificates and CRLs.
 	downloader *trustDownloader
 	// maxDepth is the maximum depth for certificate chain building.
@@ -86,12 +86,12 @@ func (c *VerifierConfig) CheckAndSetDefaults() error {
 }
 
 // NewCertVerifier creates a new certificate verifier with the provided configuration.
-func NewCertVerifier(cfg VerifierConfig) (*certVerifier, error) {
+func NewCertVerifier(cfg VerifierConfig) (*CertVerifier, error) {
 	if err := cfg.CheckAndSetDefaults(); err != nil {
 		return nil, err
 	}
 
-	return &certVerifier{
+	return &CertVerifier{
 		downloader: &trustDownloader{
 			client:  cfg.HttpClient,
 			timeout: cfg.Timeout,
@@ -105,7 +105,7 @@ func NewCertVerifier(cfg VerifierConfig) (*certVerifier, error) {
 
 // GetFullChain builds the certificate chain from the leaf certificate up to and including the root.
 // Returns [ErrChainIncomplete] if the chain cannot be completed or [ErrMaxDepthReached] if the chain is too long.
-func (t *certVerifier) GetFullChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
+func (t *CertVerifier) GetFullChain(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) ([]*x509.Certificate, error) {
 	var chain []*x509.Certificate
 	current := cert
 
@@ -131,11 +131,15 @@ func (t *certVerifier) GetFullChain(ctx context.Context, cert *x509.Certificate,
 	return nil, ErrMaxDepthReached
 }
 
-// CheckRevocation verifies that the certificate and optionally its chain are not revoked.
-// If cfg.FullChain is true, checks all certificates in the chain. Otherwise, checks only the leaf certificate.
+// Verify verifies if the given certificate has been revoked.
+//
+// Notes:
+//   - if [cfg.FullChain] is true, checks all certificates in the chain. Otherwise, checks only the leaf certificate.
+//   - if a certificate has no CRL distribution points, it is considered valid.
+//   - special case: if [cfg.FullChain] is false and the certificate has no CRL distribution points, returns nil.
+//
 // Returns [ErrCertificateRevoked] if any certificate is revoked, or nil if all certificates are valid.
-// Special case: if FullChain is false and the certificate has no CRL distribution points, returns nil.
-func (t *certVerifier) CheckRevocation(ctx context.Context, cert *x509.Certificate, cfg RevocationConfig) error {
+func (t *CertVerifier) Verify(ctx context.Context, cert *x509.Certificate, cfg RevocationConfig) error {
 	if !cfg.FullChain {
 		if len(cert.CRLDistributionPoints) == 0 {
 			return nil
@@ -181,7 +185,7 @@ func (t *certVerifier) CheckRevocation(ctx context.Context, cert *x509.Certifica
 	return nil
 }
 
-func (t *certVerifier) checkCertRevocation(ctx context.Context, cert *x509.Certificate, issuer *x509.Certificate) error {
+func (t *CertVerifier) checkCertRevocation(ctx context.Context, cert *x509.Certificate, issuer *x509.Certificate) error {
 	if len(cert.CRLDistributionPoints) == 0 {
 		return nil
 	}
@@ -241,7 +245,7 @@ func parseURLs(urls []string, maxURLs int) []*url.URL {
 	return result
 }
 
-func (t *certVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) (*x509.Certificate, error) {
+func (t *CertVerifier) findIssuer(ctx context.Context, cert *x509.Certificate, optionalChain ...[]*x509.Certificate) (*x509.Certificate, error) {
 	// 1. Check optionalChain first
 	chain := goutils.OptionalArg(optionalChain)
 	for _, candidate := range chain {
