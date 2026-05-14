@@ -1,0 +1,238 @@
+// Copyright (c) 2026, Loïc Sikidi
+// All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package tinyca
+
+import (
+	"crypto"
+	"crypto/x509"
+	"fmt"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"time"
+
+	goutils "github.com/loicsikidi/go-utils"
+	"github.com/loicsikidi/go-utils/crypto/x509util"
+)
+
+// CAType represents the type of Certificate Authority (Root or Intermediate).
+type CAType string
+
+const (
+	// CATypeRoot represents a Root Certificate Authority.
+	CATypeRoot CAType = "root"
+	// CATypeIntermediate represents an Intermediate Certificate Authority.
+	CATypeIntermediate CAType = "intermediate"
+)
+
+// String returns the string representation of [CAType].
+func (c CAType) String() string {
+	return string(c)
+}
+
+// IsValid returns true if the [CAType] is valid.
+func (c CAType) IsValid() bool {
+	return c == CATypeRoot || c == CATypeIntermediate
+}
+
+// Server provides HTTP endpoints for serving CA certificates and CRLs.
+//
+// The server uses httptest.Server to create a test HTTP server that can be
+// run in parallel without port conflicts. Each server instance gets a unique port.
+type Server struct {
+	server  *httptest.Server
+	handler *serverHandler
+	ca      *CA
+}
+
+// serverHandler is the internal HTTP handler with thread-safe mutable state.
+type serverHandler struct {
+	mu              sync.RWMutex
+	ca              *CA
+	rootCRL         []byte
+	intermediateCRL []byte
+	revokedCerts    map[CAType][]x509.RevocationListEntry
+}
+
+// NewServer creates and starts a new HTTP server for the given CA.
+//
+// The server exposes endpoints for:
+//   - CA certificates (DER format)
+//   - Certificate Revocation Lists (CRLs)
+//
+// The server should be closed when no longer needed using [Server.Close].
+func NewServer(optionalCA ...*CA) (*Server, error) {
+	ca := goutils.OptionalArgWithDefault(optionalCA, Must())
+	if ca == nil {
+		return nil, fmt.Errorf("ca is required")
+	}
+
+	h := &serverHandler{
+		ca:           ca,
+		revokedCerts: make(map[CAType][]x509.RevocationListEntry),
+	}
+
+	// Generate initial empty CRLs
+	if err := h.regenerateCRLs(); err != nil {
+		return nil, fmt.Errorf("generate initial CRLs: %w", err)
+	}
+
+	s := httptest.NewServer(h)
+	return &Server{
+		server:  s,
+		handler: h,
+		ca:      ca,
+	}, nil
+}
+
+// regenerateCRLs regenerates the CRLs based on the current revoked certificates.
+// Must be called with the lock held or during initialization.
+func (h *serverHandler) regenerateCRLs() error {
+	validity := h.ca.Intermediate.NotAfter
+	rootCRL, err := generateCRL(validity, h.revokedCerts[CATypeRoot], h.ca.Root, h.ca.RootKey)
+	if err != nil {
+		return fmt.Errorf("generate root CRL: %w", err)
+	}
+
+	intCRL, err := generateCRL(validity, h.revokedCerts[CATypeIntermediate], h.ca.Intermediate, h.ca.IntermediateKey)
+	if err != nil {
+		return fmt.Errorf("generate intermediate CRL: %w", err)
+	}
+
+	h.rootCRL = rootCRL
+	h.intermediateCRL = intCRL
+	return nil
+}
+
+// ServeHTTP handles HTTP requests for CA certificates and CRLs.
+//
+// Supported endpoints:
+//   - GET /issuer/root - Returns Root CA certificate (DER format)
+//   - GET /issuer/intermediate - Returns Intermediate CA certificate (DER format)
+//   - GET /crl/root - Returns Root CA CRL
+//   - GET /crl/intermediate - Returns Intermediate CA CRL
+func (h *serverHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) != 2 {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	resourceType := parts[0]
+	caType := CAType(parts[1])
+
+	if !caType.IsValid() {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	switch resourceType {
+	case "issuer":
+		h.serveIssuer(w, caType)
+	case "crl":
+		h.serveCRL(w, caType)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+func (h *serverHandler) serveIssuer(w http.ResponseWriter, caType CAType) {
+	var cert []byte
+	switch caType {
+	case CATypeRoot:
+		cert = h.ca.Root.Raw
+	case CATypeIntermediate:
+		cert = h.ca.Intermediate.Raw
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.WriteHeader(http.StatusOK)
+	w.Write(cert) //nolint:errcheck
+}
+
+func (h *serverHandler) serveCRL(w http.ResponseWriter, caType CAType) {
+	var crl []byte
+	switch caType {
+	case CATypeRoot:
+		crl = h.rootCRL
+	case CATypeIntermediate:
+		crl = h.intermediateCRL
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pkix-crl")
+	w.WriteHeader(http.StatusOK)
+	w.Write(crl) //nolint:errcheck
+}
+
+// BaseURL returns the base URL of the HTTP server.
+func (s *Server) BaseURL() string {
+	return s.server.URL
+}
+
+// IssuerURL returns the full URL for the issuer certificate endpoint.
+//
+// Example: IssuerURL(CATypeRoot) returns "http://127.0.0.1:12345/issuer/root"
+func (s *Server) IssuerURL(caType CAType) string {
+	return fmt.Sprintf("%s/issuer/%s", s.server.URL, caType)
+}
+
+// CRLURL returns the full URL for the CRL endpoint.
+//
+// Example: CRLURL(CATypeIntermediate) returns "http://127.0.0.1:12345/crl/intermediate"
+func (s *Server) CRLURL(caType CAType) string {
+	return fmt.Sprintf("%s/crl/%s", s.server.URL, caType)
+}
+
+// RevokeCertificate revokes a certificate and updates the CRL.
+func (s *Server) RevokeCertificate(caType CAType, cert *x509.Certificate, optionalReason ...int) error {
+	if !caType.IsValid() {
+		return fmt.Errorf("invalid CA type: %s", caType)
+	}
+
+	s.handler.mu.Lock()
+	defer s.handler.mu.Unlock()
+
+	revoked := x509.RevocationListEntry{
+		SerialNumber:   cert.SerialNumber,
+		RevocationTime: time.Now(),
+		ReasonCode:     goutils.OptionalArg(optionalReason),
+	}
+
+	s.handler.revokedCerts[caType] = append(s.handler.revokedCerts[caType], revoked)
+	return s.handler.regenerateCRLs()
+}
+
+// Close stops the HTTP server and releases resources.
+func (s *Server) Close() {
+	s.server.Close()
+}
+
+func generateCRL(validaty time.Time, revokedCerts []x509.RevocationListEntry, issuer *x509.Certificate, signer crypto.Signer) ([]byte, error) {
+	template := x509util.MustRevocationList(x509util.CreateCRLConfig{
+		Number:              big.NewInt(1),
+		NextUpdate:          validaty,
+		RevokedCertificates: revokedCerts,
+	})
+	return x509util.MarshalCRL(template, issuer, signer)
+}

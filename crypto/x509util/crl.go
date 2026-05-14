@@ -10,7 +10,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"errors"
+	"fmt"
+	"math/big"
 	"time"
+
+	goutils "github.com/loicsikidi/go-utils"
 )
 
 var (
@@ -93,6 +97,59 @@ func (c *crl) IsRevoked(cert *x509.Certificate) bool {
 		}
 	}
 	return false
+}
+
+type CreateCRLConfig struct {
+	// NextUpdate specifies the time at which the CRL will no longer be considered valid.
+	NextUpdate time.Time
+	// Number is the unique identifier for the CRL.
+	Number *big.Int
+	// PreviousCRL is the previous CRL in the sequence, if any.
+	//
+	// It is used to automatically increment the CRL number if not explicitly set.
+	// In other words, it's an alternative to cfg.Number.
+	PreviousCRL *x509.RevocationList
+	// RevokedCertificates is the list of certificates that have been revoked.
+	RevokedCertificates []x509.RevocationListEntry
+}
+
+func (c *CreateCRLConfig) CheckAndSetDefaults() error {
+	if c.NextUpdate.IsZero() {
+		return fmt.Errorf("nextupdate is required")
+	}
+	if c.Number == nil {
+		if c.PreviousCRL != nil && c.PreviousCRL.Number != nil {
+			// fallback to previous CRL number if available
+			c.Number = new(big.Int).Add(c.PreviousCRL.Number, big.NewInt(1))
+		} else {
+			return fmt.Errorf("number is required")
+		}
+	}
+	return nil
+}
+
+// NewRevocationList creates a new X.509 revocation list based on the provided configuration.
+func NewRevocationList(optionalCfg ...CreateCRLConfig) (*x509.RevocationList, error) {
+	cfg := goutils.OptionalArg(optionalCfg)
+	if err := cfg.CheckAndSetDefaults(); err != nil {
+		return nil, err
+	}
+
+	return &x509.RevocationList{
+		Number:                    cfg.Number,
+		ThisUpdate:                time.Now().Add(-1 * time.Minute), // avoid clock skew issues
+		NextUpdate:                cfg.NextUpdate,
+		RevokedCertificateEntries: cfg.RevokedCertificates,
+	}, nil
+}
+
+// MustRevocationList is like [NewRevocationList] but panics if the revocation list cannot be created or is invalid.
+func MustRevocationList(optionalCfg ...CreateCRLConfig) *x509.RevocationList {
+	rl, err := NewRevocationList(optionalCfg...)
+	if err != nil {
+		panic(err)
+	}
+	return rl
 }
 
 // MarshalCRL creates and signs a DER-encoded X.509 certificate revocation list.
