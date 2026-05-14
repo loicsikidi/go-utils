@@ -118,7 +118,8 @@ func (c *CreateCRLConfig) CheckAndSetDefaults() error {
 		return fmt.Errorf("nextupdate is required")
 	}
 	if c.Number == nil {
-		if c.PreviousCRL != nil {
+		if c.PreviousCRL != nil && c.PreviousCRL.Number != nil {
+			// fallback to previous CRL number if available
 			c.Number = new(big.Int).Add(c.PreviousCRL.Number, big.NewInt(1))
 		} else {
 			return fmt.Errorf("number is required")
@@ -136,8 +137,8 @@ func NewRevocationList(optionalCfg ...CreateCRLConfig) (*x509.RevocationList, er
 
 	return &x509.RevocationList{
 		Number:                    cfg.Number,
-		ThisUpdate:                time.Now(),
-		NextUpdate:                cfg.NextUpdate.Add(-1 * time.Minute),
+		ThisUpdate:                time.Now().Add(-1 * time.Minute), // avoid clock skew issues
+		NextUpdate:                cfg.NextUpdate,
 		RevokedCertificateEntries: cfg.RevokedCertificates,
 	}, nil
 }

@@ -50,7 +50,7 @@ type Config struct {
 
 // CheckAndSetDefaults validates and sets default values for the config.
 func (c *Config) CheckAndSetDefaults() error {
-	if c.Validity == 0 {
+	if c.Validity <= 0 {
 		c.Validity = DefaultValidity
 	}
 	if c.Organization == "" {
