@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	goutils "github.com/loicsikidi/go-utils"
@@ -66,10 +67,10 @@ type serverHandler struct {
 //   - Certificate Revocation Lists (CRLs)
 //
 // The server should be closed when no longer needed using [Server.Close].
-func NewServer(optionalCA ...*CA) (*Server, error) {
+func NewServer(t *testing.T, optionalCA ...*CA) *Server {
 	ca := goutils.OptionalArgWithDefault(optionalCA, Must())
 	if ca == nil {
-		return nil, fmt.Errorf("ca is required")
+		t.Fatalf("ca is required")
 	}
 
 	h := &serverHandler{
@@ -79,15 +80,20 @@ func NewServer(optionalCA ...*CA) (*Server, error) {
 
 	// Generate initial empty CRLs
 	if err := h.regenerateCRLs(); err != nil {
-		return nil, fmt.Errorf("generate initial CRLs: %w", err)
+		t.Fatalf("generate initial CRLs: %v", err)
 	}
 
-	s := httptest.NewServer(h)
-	return &Server{
-		server:  s,
+	srv := &Server{
+		server:  httptest.NewServer(h),
 		handler: h,
 		ca:      ca,
-	}, nil
+	}
+
+	t.Cleanup(func() {
+		srv.Close()
+	})
+
+	return srv
 }
 
 // regenerateCRLs regenerates the CRLs based on the current revoked certificates.

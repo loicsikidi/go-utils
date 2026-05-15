@@ -100,11 +100,7 @@ func TestServer(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	srv, err := NewServer(ca)
-	if err != nil {
-		t.Fatalf("NewServer() failed: %v", err)
-	}
-	defer srv.Close()
+	srv := NewServer(t, ca)
 
 	t.Run("root issuer", func(t *testing.T) {
 		resp, err := http.Get(srv.IssuerURL(CATypeRoot))
@@ -217,11 +213,7 @@ func TestRevokeCertificate(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	srv, err := NewServer(ca)
-	if err != nil {
-		t.Fatalf("NewServer() failed: %v", err)
-	}
-	defer srv.Close()
+	srv := NewServer(t, ca)
 
 	// Issue a certificate
 	req := CertificateRequest{
@@ -282,12 +274,11 @@ func TestParallelServers(t *testing.T) {
 				return
 			}
 
-			srv, err := NewServer(ca)
-			if err != nil {
-				t.Errorf("NewServer() failed: %v", err)
+			srv := NewServer(t, ca)
+			if srv == nil {
+				t.Errorf("NewServer() failed")
 				return
 			}
-			defer srv.Close()
 
 			// Test that the server is accessible
 			resp, err := http.Get(srv.IssuerURL(CATypeRoot))

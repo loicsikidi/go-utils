@@ -5,9 +5,12 @@
 
 // Package tinyca provides a minimal PKI (Public Key Infrastructure) for testing.
 //
-// It creates a Root CA and an Intermediate CA with an HTTP server to expose
-// their Certificate Revocation Lists (CRLs). This package is designed for testing
-// purposes and supports running multiple instances in parallel without conflicts.
+// tinyca.CA exposes a PKI holding a Root CA and an Intermediate CA (automatically generated) capable of producing leaf
+// certificates.
+// tinyca.Server exposes an HTTP server to serve the CA certificates and
+// their Certificate Revocation Lists (CRLs).
+//
+// IMPORTANT: this package is designed for testing
 package tinyca
 
 import (
