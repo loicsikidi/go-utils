@@ -192,10 +192,8 @@ func (w *responseWriter) finishRequest() {
 		w.WriteHeader(http.StatusOK)
 	}
 
-	// Write HTTP response
 	fmt.Fprintf(w.conn, "HTTP/1.1 %d %s\r\n", w.statusCode, http.StatusText(w.statusCode)) //nolint:errcheck
 
-	// Set Content-Length if not already set
 	if w.header.Get("Content-Length") == "" && len(w.body) > 0 {
 		w.header.Set("Content-Length", fmt.Sprintf("%d", len(w.body)))
 	}
