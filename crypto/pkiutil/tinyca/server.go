@@ -396,6 +396,15 @@ func (s *Server) Close() {
 	s.listener.Close()
 }
 
+// ToTLSCertificate converts an [x509.Certificate] and a [crypto.Signer] into a [tls.Certificate].
+func (s *Server) ToTLSCertificate(cert *x509.Certificate, key crypto.Signer) *tls.Certificate {
+	return &tls.Certificate{
+		Certificate: [][]byte{cert.Raw, s.ca.Intermediate.Raw},
+		PrivateKey:  key,
+		Leaf:        cert,
+	}
+}
+
 func generateCRL(validaty time.Time, revokedCerts []x509.RevocationListEntry, issuer *x509.Certificate, signer crypto.Signer, previousCRL *x509.RevocationList) (*x509.RevocationList, error) {
 	cfg := x509util.CreateCRLConfig{
 		NextUpdate:          validaty,
