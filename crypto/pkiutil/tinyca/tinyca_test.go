@@ -49,7 +49,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestIssueCertificate(t *testing.T) {
-	ca, err := New(Config{})
+	ca, err := New()
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestIssueCertificate(t *testing.T) {
 }
 
 func TestServer(t *testing.T) {
-	ca, err := New(Config{})
+	ca, err := New()
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestServer(t *testing.T) {
 }
 
 func TestRevokeCertificate(t *testing.T) {
-	ca, err := New(Config{})
+	ca, err := New()
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -264,11 +264,11 @@ func TestParallelServers(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numServers)
 
-	for i := 0; i < numServers; i++ {
+	for range numServers {
 		go func() {
 			defer wg.Done()
 
-			ca, err := New(Config{})
+			ca, err := New()
 			if err != nil {
 				t.Errorf("New() failed: %v", err)
 				return
@@ -280,7 +280,6 @@ func TestParallelServers(t *testing.T) {
 				return
 			}
 
-			// Test that the server is accessible
 			resp, err := http.Get(srv.IssuerURL(CATypeRoot))
 			if err != nil {
 				t.Errorf("GET /issuer/root failed: %v", err)
@@ -295,4 +294,205 @@ func TestParallelServers(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestHTTPSServer(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+	client := srv.Client()
+
+	t.Run("https root issuer", func(t *testing.T) {
+		resp, err := client.Get(srv.IssuerURL(
+			CATypeRoot,
+			/* optionalUseTLS= */ true),
+		)
+		if err != nil {
+			t.Fatalf("GET /issuer/root failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Read response body failed: %v", err)
+		}
+
+		cert, err := x509.ParseCertificate(body)
+		if err != nil {
+			t.Fatalf("Parse certificate failed: %v", err)
+		}
+
+		if cert.Subject.CommonName != "Root CA" {
+			t.Errorf("Certificate CommonName = %q, want %q", cert.Subject.CommonName, "Root CA")
+		}
+	})
+
+	t.Run("https intermediate CRL", func(t *testing.T) {
+		resp, err := client.Get(srv.CRLURL(
+			CATypeIntermediate,
+			/* optionalUseTLS= */ true),
+		)
+		if err != nil {
+			t.Fatalf("GET /crl/intermediate failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Read response body failed: %v", err)
+		}
+
+		crl, err := x509.ParseRevocationList(body)
+		if err != nil {
+			t.Fatalf("Parse CRL failed: %v", err)
+		}
+
+		if len(crl.RevokedCertificateEntries) != 0 {
+			t.Errorf("CRL has %d revoked certificates, want 0", len(crl.RevokedCertificateEntries))
+		}
+	})
+}
+
+func TestBaseTLSURL(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+
+	if srv.BaseURL() == "" {
+		t.Error("BaseURL() returned empty string")
+	}
+
+	if srv.BaseTLSURL() == "" {
+		t.Error("BaseTLSURL() returned empty string")
+	}
+
+	if srv.BaseURL() == srv.BaseTLSURL() {
+		t.Error("BaseURL() and BaseTLSURL() should return different URLs")
+	}
+}
+
+func TestGetPool(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+	pool := srv.GetPool()
+
+	if pool == nil {
+		t.Fatal("GetPool() returned nil")
+	}
+
+	// Verify that the pool contains the CA certificates by using it to verify a cert
+	req := CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: "test.example.com",
+		},
+		DNSNames: []string{"test.example.com"},
+	}
+
+	cert, _, err := ca.Generate(req)
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	intermediates := x509.NewCertPool()
+	intermediates.AddCert(ca.Intermediate)
+
+	opts := x509.VerifyOptions{
+		Roots:         pool,
+		Intermediates: intermediates,
+	}
+
+	if _, err := cert.Verify(opts); err != nil {
+		t.Errorf("Certificate verification failed: %v", err)
+	}
+}
+
+func TestClient(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+	client := srv.Client()
+
+	if client == nil {
+		t.Fatal("Client() returned nil")
+	}
+
+	resp, err := client.Get(srv.BaseTLSURL())
+	if err != nil {
+		t.Fatalf("HTTPS request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	resp, err = client.Get(srv.BaseURL())
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+}
+
+func TestSetServerCertificate(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+	client := srv.Client()
+
+	// Initial HTTPS request should work
+	resp, err := client.Get(srv.IssuerURL(
+		CATypeRoot,
+		/* optionalUseTLS= */ true),
+	)
+	if err != nil {
+		t.Fatalf("Initial HTTPS request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Initial status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Generate a new server certificate
+	newCert, _, err := generateServerCertificate(ca)
+	if err != nil {
+		t.Fatalf("Generate new certificate failed: %v", err)
+	}
+
+	// Update the server certificate
+	srv.SetServerCertificate(newCert)
+
+	// Subsequent HTTPS request should still work with the new certificate
+	resp, err = client.Get(srv.IssuerURL(
+		CATypeIntermediate,
+		/* optionalUseTLS= */ true),
+	)
+	if err != nil {
+		t.Fatalf("HTTPS request after certificate update failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Status after certificate update = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
 }

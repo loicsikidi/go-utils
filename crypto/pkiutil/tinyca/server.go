@@ -7,11 +7,14 @@ package tinyca
 
 import (
 	"crypto"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 
 	goutils "github.com/loicsikidi/go-utils"
 	"github.com/loicsikidi/go-utils/crypto/x509util"
+	"github.com/loicsikidi/go-utils/net/httputil"
 )
 
 // CAType represents the type of Certificate Authority (Root or Intermediate).
@@ -41,14 +45,21 @@ func (c CAType) IsValid() bool {
 	return c == CATypeRoot || c == CATypeIntermediate
 }
 
-// Server provides HTTP endpoints for serving CA certificates and CRLs.
+// Server provides HTTP and HTTPS endpoints for serving CA certificates and CRLs.
 //
-// The server uses httptest.Server to create a test HTTP server that can be
-// run in parallel without port conflicts. Each server instance gets a unique port.
+// The server uses an HTTP/HTTPS multiplexer to serve both protocols on the same port,
+// allowing tests to run in parallel without port conflicts. Each server instance gets
+// a unique OS-assigned port.
 type Server struct {
-	server  *httptest.Server
-	handler *serverHandler
-	ca      *CA
+	listener      net.Listener
+	handler       *serverHandler
+	ca            *CA
+	baseURL       string
+	baseTLSURL    string
+	tlsConfig     *tls.Config
+	certMu        sync.RWMutex
+	serverCert    *tls.Certificate
+	serverCertKey crypto.Signer
 }
 
 // serverHandler is the internal HTTP handler with thread-safe mutable state.
@@ -60,11 +71,43 @@ type serverHandler struct {
 	revokedCerts    map[CAType][]x509.RevocationListEntry
 }
 
-// NewServer creates and starts a new HTTP server for the given CA.
+// generateServerCertificate generates a TLS server certificate signed by the Intermediate CA.
+// The certificate includes localhost and 127.0.0.1 in the SANs.
+func generateServerCertificate(ca *CA) (*tls.Certificate, crypto.Signer, error) {
+	req := CertificateRequest{
+		Subject: pkix.Name{
+			CommonName:   "localhost",
+			Organization: ca.Intermediate.Subject.Organization,
+		},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    []string{"localhost"},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+
+	cert, key, err := ca.Generate(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate server certificate: %w", err)
+	}
+
+	tlsCert := &tls.Certificate{
+		Certificate: [][]byte{cert.Raw, ca.Intermediate.Raw},
+		PrivateKey:  key,
+		Leaf:        cert,
+	}
+
+	return tlsCert, key, nil
+}
+
+// NewServer creates and starts a new HTTP/HTTPS server for the given CA.
 //
 // The server exposes endpoints for:
 //   - CA certificates (DER format)
 //   - Certificate Revocation Lists (CRLs)
+//
+// The server multiplexes HTTP and HTTPS on the same port, with both protocols
+// serving the same content. Use [Server.BaseURL] for HTTP and [Server.BaseTLSURL]
+// for HTTPS.
 //
 // The server should be closed when no longer needed using [Server.Close].
 func NewServer(t *testing.T, optionalCA ...*CA) *Server {
@@ -83,11 +126,56 @@ func NewServer(t *testing.T, optionalCA ...*CA) *Server {
 		t.Fatalf("generate initial CRLs: %v", err)
 	}
 
-	srv := &Server{
-		server:  httptest.NewServer(h),
-		handler: h,
-		ca:      ca,
+	serverCert, serverKey, err := generateServerCertificate(ca)
+	if err != nil {
+		t.Fatalf("generate server certificate: %v", err)
 	}
+
+	srv := &Server{
+		handler:       h,
+		ca:            ca,
+		serverCert:    serverCert,
+		serverCertKey: serverKey,
+	}
+
+	// Create TLS config with GetCertificate callback for dynamic certificate updates
+	tlsConfig := &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			srv.certMu.RLock()
+			defer srv.certMu.RUnlock()
+			return srv.serverCert, nil
+		},
+		MinVersion: tls.VersionTLS13,
+	}
+	srv.tlsConfig = tlsConfig
+
+	// Create listener on random port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("create listener: %v", err)
+	}
+	srv.listener = listener
+
+	addr := listener.Addr().String()
+	srv.baseURL = "http://" + addr
+	srv.baseTLSURL = "https://" + addr
+
+	mux, err := httputil.NewHTTPSMux(httputil.MuxConfig{
+		HTTPHandler:  h,
+		HTTPSHandler: h,
+		TLSConfig:    tlsConfig,
+	})
+	if err != nil {
+		listener.Close()
+		t.Fatalf("create multiplexer: %v", err)
+	}
+
+	// Start serving in background
+	go func() {
+		if err := mux.Serve(listener); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("unexpected server error: %v", err)
+		}
+	}()
 
 	t.Cleanup(func() {
 		srv.Close()
@@ -191,23 +279,97 @@ func (h *serverHandler) serveCRL(w http.ResponseWriter, caType CAType) {
 	w.Write(crl) //nolint:errcheck
 }
 
-// BaseURL returns the base URL of the HTTP server.
+// BaseURL returns the HTTP base URL of the server.
 func (s *Server) BaseURL() string {
-	return s.server.URL
+	return s.baseURL
+}
+
+// BaseTLSURL returns the HTTPS base URL of the server.
+func (s *Server) BaseTLSURL() string {
+	return s.baseTLSURL
 }
 
 // IssuerURL returns the full URL for the issuer certificate endpoint.
+// Uses HTTP by default. Pass true to use HTTPS.
 //
-// Example: IssuerURL(CATypeRoot) returns "http://127.0.0.1:12345/issuer/root"
-func (s *Server) IssuerURL(caType CAType) string {
-	return fmt.Sprintf("%s/issuer/%s", s.server.URL, caType)
+// Example:
+//
+//	IssuerURL(CATypeRoot)       // returns "http://127.0.0.1:12345/issuer/root"
+//	IssuerURL(CATypeRoot, true) // returns "https://127.0.0.1:12345/issuer/root"
+func (s *Server) IssuerURL(caType CAType, optionalUseTLS ...bool) string {
+	useTLS := goutils.OptionalArg(optionalUseTLS)
+	base := s.baseURL
+	if useTLS {
+		base = s.baseTLSURL
+	}
+	return fmt.Sprintf("%s/issuer/%s", base, caType)
 }
 
 // CRLURL returns the full URL for the CRL endpoint.
+// Uses HTTP by default. Pass true to use HTTPS.
 //
-// Example: CRLURL(CATypeIntermediate) returns "http://127.0.0.1:12345/crl/intermediate"
-func (s *Server) CRLURL(caType CAType) string {
-	return fmt.Sprintf("%s/crl/%s", s.server.URL, caType)
+// Example:
+//
+//	CRLURL(CATypeIntermediate)       // returns "http://127.0.0.1:12345/crl/intermediate"
+//	CRLURL(CATypeIntermediate, true) // returns "https://127.0.0.1:12345/crl/intermediate"
+func (s *Server) CRLURL(caType CAType, optionalUseTLS ...bool) string {
+	useTLS := goutils.OptionalArg(optionalUseTLS)
+	base := s.baseURL
+	if useTLS {
+		base = s.baseTLSURL
+	}
+	return fmt.Sprintf("%s/crl/%s", base, caType)
+}
+
+// GetPool returns a certificate pool containing the CA certificates.
+// Use this pool to configure HTTP clients for trusting the server's TLS certificate.
+//
+// Example:
+//
+//	srv := tinyca.NewServer(t)
+//	client := &http.Client{
+//	    Transport: &http.Transport{
+//	        TLSClientConfig: &tls.Config{
+//	            RootCAs: srv.GetPool(),
+//	        },
+//	    },
+//	}
+func (s *Server) GetPool() *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AddCert(s.ca.Root)
+	return pool
+}
+
+// Client returns an HTTP client configured to trust the server's TLS certificate.
+// The client can be used to make HTTPS requests to the server.
+//
+// Example:
+//
+//	srv := tinyca.NewServer(t)
+//	client := srv.Client()
+//	resp, err := client.Get(srv.IssuerURL(tinyca.CATypeRoot, /* optionalUseTLS= */ true))
+func (s *Server) Client() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: s.GetPool(),
+			},
+		},
+	}
+}
+
+// SetServerCertificate updates the server's TLS certificate.
+// This method is thread-safe and the new certificate will be used for subsequent TLS connections.
+//
+// Example:
+//
+//	srv := tinyca.NewServer(t)
+//	newCert := &tls.Certificate{...}
+//	srv.SetServerCertificate(newCert)
+func (s *Server) SetServerCertificate(cert *tls.Certificate) {
+	s.certMu.Lock()
+	defer s.certMu.Unlock()
+	s.serverCert = cert
 }
 
 // RevokeCertificate revokes a certificate and updates the CRL.
@@ -229,9 +391,9 @@ func (s *Server) RevokeCertificate(caType CAType, cert *x509.Certificate, option
 	return s.handler.regenerateCRLs()
 }
 
-// Close stops the HTTP server and releases resources.
+// Close stops the server and releases resources.
 func (s *Server) Close() {
-	s.server.Close()
+	s.listener.Close()
 }
 
 func generateCRL(validaty time.Time, revokedCerts []x509.RevocationListEntry, issuer *x509.Certificate, signer crypto.Signer) ([]byte, error) {
