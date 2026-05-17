@@ -496,3 +496,78 @@ func TestSetServerCertificate(t *testing.T) {
 		t.Errorf("Status after certificate update = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
+
+func TestCRLNumberAutoIncrement(t *testing.T) {
+	ca, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	srv := NewServer(t, ca)
+
+	fetchCRL := func() *x509.RevocationList {
+		t.Helper()
+		resp, err := http.Get(srv.CRLURL(CATypeIntermediate))
+		if err != nil {
+			t.Fatalf("GET /crl/intermediate failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Read response body failed: %v", err)
+		}
+
+		crl, err := x509.ParseRevocationList(body)
+		if err != nil {
+			t.Fatalf("Parse CRL failed: %v", err)
+		}
+		return crl
+	}
+
+	// Initial CRL should have number 1
+	crl1 := fetchCRL()
+	if crl1.Number.Int64() != 1 {
+		t.Errorf("Initial CRL number = %d, want 1", crl1.Number.Int64())
+	}
+
+	// Revoke first certificate and check CRL number increments to 2
+	cert1, _, err := ca.Generate(CertificateRequest{
+		Subject: pkix.Name{CommonName: "cert1.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("Generate cert1 failed: %v", err)
+	}
+
+	if err := srv.RevokeCertificate(CATypeIntermediate, cert1); err != nil {
+		t.Fatalf("RevokeCertificate cert1 failed: %v", err)
+	}
+
+	crl2 := fetchCRL()
+	if crl2.Number.Int64() != 2 {
+		t.Errorf("CRL number after first revocation = %d, want 2", crl2.Number.Int64())
+	}
+	if len(crl2.RevokedCertificateEntries) != 1 {
+		t.Errorf("CRL has %d revoked certificates, want 1", len(crl2.RevokedCertificateEntries))
+	}
+
+	// Revoke second certificate and check CRL number increments to 3
+	cert2, _, err := ca.Generate(CertificateRequest{
+		Subject: pkix.Name{CommonName: "cert2.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("Generate cert2 failed: %v", err)
+	}
+
+	if err := srv.RevokeCertificate(CATypeIntermediate, cert2); err != nil {
+		t.Fatalf("RevokeCertificate cert2 failed: %v", err)
+	}
+
+	crl3 := fetchCRL()
+	if crl3.Number.Int64() != 3 {
+		t.Errorf("CRL number after second revocation = %d, want 3", crl3.Number.Int64())
+	}
+	if len(crl3.RevokedCertificateEntries) != 2 {
+		t.Errorf("CRL has %d revoked certificates, want 2", len(crl3.RevokedCertificateEntries))
+	}
+}
