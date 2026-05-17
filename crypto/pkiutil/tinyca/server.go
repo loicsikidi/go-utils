@@ -66,8 +66,8 @@ type Server struct {
 type serverHandler struct {
 	mu              sync.RWMutex
 	ca              *CA
-	rootCRL         []byte
-	intermediateCRL []byte
+	rootCRL         *x509.RevocationList
+	intermediateCRL *x509.RevocationList
 	revokedCerts    map[CAType][]x509.RevocationListEntry
 }
 
@@ -188,12 +188,12 @@ func NewServer(t *testing.T, optionalCA ...*CA) *Server {
 // Must be called with the lock held or during initialization.
 func (h *serverHandler) regenerateCRLs() error {
 	validity := h.ca.Intermediate.NotAfter
-	rootCRL, err := generateCRL(validity, h.revokedCerts[CATypeRoot], h.ca.Root, h.ca.RootKey)
+	rootCRL, err := generateCRL(validity, h.revokedCerts[CATypeRoot], h.ca.Root, h.ca.RootKey, h.rootCRL)
 	if err != nil {
 		return fmt.Errorf("generate root CRL: %w", err)
 	}
 
-	intCRL, err := generateCRL(validity, h.revokedCerts[CATypeIntermediate], h.ca.Intermediate, h.ca.IntermediateKey)
+	intCRL, err := generateCRL(validity, h.revokedCerts[CATypeIntermediate], h.ca.Intermediate, h.ca.IntermediateKey, h.intermediateCRL)
 	if err != nil {
 		return fmt.Errorf("generate intermediate CRL: %w", err)
 	}
@@ -266,9 +266,9 @@ func (h *serverHandler) serveCRL(w http.ResponseWriter, caType CAType) {
 	var crl []byte
 	switch caType {
 	case CATypeRoot:
-		crl = h.rootCRL
+		crl = h.rootCRL.Raw
 	case CATypeIntermediate:
-		crl = h.intermediateCRL
+		crl = h.intermediateCRL.Raw
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
@@ -396,11 +396,21 @@ func (s *Server) Close() {
 	s.listener.Close()
 }
 
-func generateCRL(validaty time.Time, revokedCerts []x509.RevocationListEntry, issuer *x509.Certificate, signer crypto.Signer) ([]byte, error) {
-	template := x509util.MustRevocationList(x509util.CreateCRLConfig{
-		Number:              big.NewInt(1),
+func generateCRL(validaty time.Time, revokedCerts []x509.RevocationListEntry, issuer *x509.Certificate, signer crypto.Signer, previousCRL *x509.RevocationList) (*x509.RevocationList, error) {
+	cfg := x509util.CreateCRLConfig{
 		NextUpdate:          validaty,
 		RevokedCertificates: revokedCerts,
-	})
-	return x509util.MarshalCRL(template, issuer, signer)
+		PreviousCRL:         previousCRL,
+	}
+
+	if previousCRL == nil {
+		cfg.Number = big.NewInt(1)
+	}
+
+	template := x509util.MustRevocationList(cfg)
+	b, err := x509util.MarshalCRL(template, issuer, signer)
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseRevocationList(b)
 }
